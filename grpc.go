@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"hash/crc32"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -250,6 +251,27 @@ func forward(cc *grpc.ClientConn, method string, returnedType reflect.Type, ctx 
 	grpc.SetTrailer(ctx, trailer)
 
 	return out, err
+}
+
+// NewStatefulSetShardInterceptor create a shard interceptor compatible with kubernetes
+// statefulset, each pod is a shard, shard number is extract from pod ordinal number
+func NewStatefulSetShardInterceptor(grpcport, shards int) grpc.UnaryServerInterceptor {
+	hostname, _ := os.Hostname()
+	sp := strings.Split(hostname, "-")
+	if len(sp) < 2 {
+		panic("invalid hostname" + hostname)
+	}
+	ordinal := sp[len(sp)-1]
+	pari64, _ := strconv.ParseInt(ordinal, 10, 0)
+	ordinal_num := int(pari64)
+
+	hosts := make([]string, 0)
+	for i := 0; i < shards; i++ {
+		// convo-${i}.convo:{port}
+		hosts = append(hosts, sp[0]+"-"+strconv.Itoa(i)+"."+sp[0]+":"+strconv.Itoa(grpcport))
+	}
+
+	return NewServerShardInterceptor(hosts, ordinal_num)
 }
 
 // NewShardInterceptor makes a GRPC server intercepter that can be used for sharding
