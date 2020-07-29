@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"hash/fnv"
+	"hash/crc32"
 	"reflect"
 	"strconv"
 	"strings"
@@ -110,14 +110,12 @@ func WithShardRedirect() grpc.DialOption {
 			}
 			if pkey != "" {
 				// finding the shard number
-				var hash = fnv.New32a()
-				hash.Write([]byte(pkey))
-				shardNumber := int(hash.Sum32()) % len(addrs)
-
+				shardNumber := int(crc32.ChecksumIEEE([]byte(pkey))+1) % len(addrs)
 				host := addrs[shardNumber]
 				co, ok := conn[host]
 				if !ok {
 					var err error
+
 					co, err = grpc.Dial(host, grpc.WithInsecure())
 					if err != nil {
 						lock.Unlock()
@@ -263,28 +261,30 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 
 	// in order to proxy (forward) the request to another grpc host,
 	// we must have an output object of the request's method (so we can marshal the response).
-	// we are going to make a map of returning type for all methods of the server. And do it
-	// only once time, right before the first request.
-	analysed := false // make sure we don't make the map twice
-	var returnedTypeM map[string]reflect.Type
+	// we are going to build a map of returning type for all methods of the server. And do it
+	// only once time for each method name right before the first request.
+	returnedTypeM := make(map[string]reflect.Type)
 
 	// GRPC connections to shard workers
 	// mapping worker address (user-2.user:8080) to a GRPC connection
 	lock := &sync.Mutex{}
 	conn := make(map[string]*grpc.ClientConn)
 
-	return func(ctx context.Context, in interface{}, sinfo *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		// making a map of returning type for all methods of the server
-		lock.Lock()
-		if !analysed {
-			returnedTypeM = analysisReturnType(sinfo.Server)
-			analysed = true
-		}
-		lock.Unlock()
+	return func(ctx context.Context, in interface{}, sinfo *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (out interface{}, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				e, ok := r.(error)
+				if ok {
+					err = errors.Wrap(e, 500, errors.E_unknown)
+				}
+				err = errors.New(500, errors.E_unknown, fmt.Sprintf("%v", e))
+			}
+		}()
 
 		// looking for shard_key in header or in account_id parameter
 		md, _ := metadata.FromIncomingContext(ctx)
 		pkey := strings.Join(md["shard_key"], "")
+
 		if pkey == "" {
 			pkey = GetAccountId(in)
 			if pkey == "" {
@@ -294,9 +294,8 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 		}
 
 		// find the correct shard
-		var hash = fnv.New32a()
-		hash.Write([]byte(pkey))
-		parindex := hash.Sum32() % uint32(numShard)
+
+		parindex := int(crc32.ChecksumIEEE([]byte(pkey))+1) % numShard
 
 		// process if this is the correct shard
 		if int(parindex) == id {
@@ -324,8 +323,6 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 			extraHeader.Set("shard_redirected", "true")
 		}
 
-		methodSplit := strings.Split(sinfo.FullMethod, "/")
-		shortmethod := methodSplit[len(methodSplit)-1]
 		header := metadata.New(nil)
 		header.Set("shard_addrs", serviceAddrs...)
 		grpc.SendHeader(ctx, header)
@@ -334,6 +331,7 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 		host := serviceAddrs[parindex]
 		lock.Lock()
 		cc, ok := conn[host]
+
 		if !ok {
 			var err error
 			cc, err = grpc.Dial(host, grpc.WithInsecure())
@@ -342,26 +340,34 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 				return nil, err
 			}
 			conn[host] = cc
-			lock.Unlock()
 		}
 
-		return forward(cc, sinfo.FullMethod, returnedTypeM[shortmethod], ctx, in, extraHeader)
+		// making a map of returning type for all methods of the server
+		returntype := returnedTypeM[sinfo.FullMethod]
+		if returntype == nil {
+			returntype = getReturnType(sinfo.Server, sinfo.FullMethod)
+			returnedTypeM[sinfo.FullMethod] = returntype
+		}
+		lock.Unlock()
+		return forward(cc, sinfo.FullMethod, returntype, ctx, in, extraHeader)
 	}
 }
 
-// analysisReturnType returns all return types for every GRPC methods in server handler
-// the returned map takes full method name (i.e., /package.service/method) as key, and the return type as value
+// getReturnType returns the return types for a GRPC method
+// the method name should be full method name (i.e., /package.service/method)
 // For example, with handler
 //   (s *server) func Goodbye() string {}
 //   (s *server) func Ping(_ context.Context, _ *pb.Ping) (*pb.Pong, error) {}
 //   (s *server) func Hello(_ context.Context, _ *pb.Empty) (*pb.String, error) {}
-// this function detected 2 GRPC methods is Ping and Hello, it would return
-// {"Ping": *pb.Pong, "Hello": *pb.Empty}
-func analysisReturnType(server interface{}) map[string]reflect.Type {
-	m := make(map[string]reflect.Type)
+func getReturnType(server interface{}, fullmethod string) reflect.Type {
 	t := reflect.TypeOf(server)
 	for i := 0; i < t.NumMethod(); i++ {
 		methodType := t.Method(i).Type
+
+		if !strings.HasSuffix(fullmethod, "/"+t.Method(i).Name) {
+			continue
+		}
+
 		if methodType.NumOut() != 2 || methodType.NumIn() < 2 {
 			continue
 		}
@@ -376,9 +382,10 @@ func analysisReturnType(server interface{}) map[string]reflect.Type {
 			continue
 		}
 
-		m[t.Method(i).Name] = methodType.Out(0).Elem()
+		return methodType.Out(0).Elem()
+
 	}
-	return m
+	return nil
 }
 
 // GetAccountId returns the value of "account_id" field in message
