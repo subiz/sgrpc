@@ -110,7 +110,7 @@ func WithShardRedirect() grpc.DialOption {
 			}
 			if pkey != "" {
 				// finding the shard number
-				shardNumber := int(crc32.ChecksumIEEE([]byte(pkey))+1) % len(addrs)
+				shardNumber := int(crc32.ChecksumIEEE([]byte(pkey))) % len(addrs)
 				host := addrs[shardNumber]
 				co, ok := conn[host]
 				if !ok {
@@ -295,7 +295,7 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 
 		// find the correct shard
 
-		parindex := int(crc32.ChecksumIEEE([]byte(pkey))+1) % numShard
+		parindex := int(crc32.ChecksumIEEE([]byte(pkey))) % numShard
 
 		// process if this is the correct shard
 		if int(parindex) == id {
