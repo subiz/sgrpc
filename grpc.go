@@ -107,7 +107,7 @@ func WithShardRedirect() grpc.DialOption {
 			md, _ := metadata.FromOutgoingContext(ctx)
 			pkey := strings.Join(md["shard_key"], "")
 			if pkey == "" {
-				pkey = GetAccountId(req)
+				pkey = GetAccountId(ctx, req)
 			}
 			if pkey != "" {
 				// finding the shard number
@@ -308,7 +308,7 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 		pkey := strings.Join(md["shard_key"], "")
 
 		if pkey == "" {
-			pkey = GetAccountId(in)
+			pkey = GetAccountId(ctx, in)
 			if pkey == "" {
 				// no sharding parameter, perform the request anyway
 				return handler(ctx, in)
@@ -410,12 +410,19 @@ func getReturnType(server interface{}, fullmethod string) reflect.Type {
 	return nil
 }
 
-// GetAccountId returns the value of "account_id" field in message
-func GetAccountId(message interface{}) string {
+func GetAccountId(ctx context.Context, message interface{}) string {
 	msgrefl := message.(protoV2.Message).ProtoReflect()
 	accIdDesc := msgrefl.Descriptor().Fields().ByName("account_id")
+	accid := ""
 	if accIdDesc == nil {
-		return ""
+		accid = ""
+	} else {
+		accid = msgrefl.Get(accIdDesc).String()
 	}
-	return msgrefl.Get(accIdDesc).String()
+
+	if accid == "" {
+		accid = FromGrpcCtx(ctx).GetCredential().GetAccountId()
+	}
+
+	return accid
 }
