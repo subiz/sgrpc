@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/subiz/header"
-	pb "github.com/subiz/header/api"
 	cpb "github.com/subiz/header/common"
 	upb "github.com/subiz/header/user"
 	"google.golang.org/grpc"
@@ -17,47 +16,6 @@ import (
 
 type TestCacheApiServer struct {
 	ncall int
-}
-
-func (me *TestCacheApiServer) Call(ctx context.Context, req *pb.Request) (*pb.Response, error) {
-	me.ncall++
-	if me.ncall > 3 {
-		// insufficient caching
-		return &pb.Response{Code: 500}, nil
-	}
-	SetMaxAge(ctx, 2)
-	return &pb.Response{Code: 212}, nil
-}
-
-func (me *TestCacheApiServer) Serve() {
-	lis, err := net.Listen("tcp", ":21234")
-	if err != nil {
-		panic(err)
-	}
-	grpcServer := grpc.NewServer()
-	header.RegisterApiServerServer(grpcServer, me)
-	grpcServer.Serve(lis)
-}
-
-func TestCache(t *testing.T) {
-	server := &TestCacheApiServer{}
-	go server.Serve()
-
-	conn, err := grpc.Dial(":21234", WithCache(), grpc.WithInsecure())
-	if err != nil {
-		panic(err)
-	}
-	client := header.NewApiServerClient(conn)
-
-	for i := 0; i < 10; i++ {
-		time.Sleep(500 * time.Millisecond)
-		var header metadata.MD // variable to store header and trailer
-		r, _ := client.Call(context.Background(), &pb.Request{Method: "thanh"}, grpc.Header(&header))
-
-		if r.Code != 212 {
-			t.Fatal("SHOULD BE 212")
-		}
-	}
 }
 
 type TestShardApiServer struct {
