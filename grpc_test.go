@@ -9,7 +9,6 @@ import (
 
 	"github.com/subiz/header"
 	cpb "github.com/subiz/header/common"
-	upb "github.com/subiz/header/user"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -23,8 +22,8 @@ type TestShardApiServer struct {
 	shards []string
 }
 
-func (me *TestShardApiServer) ListTopVisitors(ctx context.Context, req *cpb.Id) (*upb.Visitors, error) {
-	return &upb.Visitors{}, nil
+func (me *TestShardApiServer) ListTopVisitors(ctx context.Context, req *cpb.Id) (*header.Visitors, error) {
+	return &header.Visitors{}, nil
 }
 
 func (me TestShardApiServer) Serve(id int) {
