@@ -14,7 +14,7 @@ import (
 
 	"github.com/dgraph-io/ristretto"
 	"github.com/golang/protobuf/proto"
-	"github.com/subiz/errors"
+	"github.com/subiz/header"
 	co "github.com/subiz/header/common"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -200,19 +200,16 @@ func RecoverInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServe
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = errors.Wrap(e, 500, errors.E_unknown)
+					err = header.E500(e, header.E_undefined)
+				} else {
+					err = header.E500(nil, header.E_undefined, fmt.Sprintf("%v", e))
 				}
-
-				err = errors.New(500, errors.E_unknown, fmt.Sprintf("%v", e))
 			}
 		}()
 		ret, err = handler(ctx, req)
 	}()
 	if err != nil {
-		e, ok := err.(*errors.Error)
-		if !ok {
-			e, _ = errors.Wrap(err, 500, errors.E_unknown).(*errors.Error)
-		}
+		e := header.E500(err, header.E_undefined)
 		md := metadata.Pairs(PanicKey, e.Error())
 		grpc.SendHeader(ctx, md)
 	}
@@ -224,12 +221,12 @@ func NewRecoveryInterceptor() grpc.ServerOption {
 	return grpc.UnaryInterceptor(RecoverInterceptor)
 }
 
-func GetPanic(md metadata.MD) *errors.Error {
+func GetPanic(md metadata.MD) *header.Error {
 	errs := strings.Join(md[PanicKey], "")
 	if errs == "" {
 		return nil
 	}
-	return errors.FromString(errs)
+	return header.FromString(errs)
 }
 
 // forward proxy a GRPC calls to another host, header and trailer are preserved
@@ -297,9 +294,10 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = errors.Wrap(e, 500, errors.E_unknown)
+					err = header.E500(e, header.E_undefined)
+				} else {
+					err = header.E500(nil, header.E_undefined, fmt.Sprintf("%v", e))
 				}
-				err = errors.New(500, errors.E_unknown, fmt.Sprintf("%v", e))
 			}
 		}()
 
