@@ -12,80 +12,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/ristretto"
-	"github.com/golang/protobuf/proto"
 	"github.com/subiz/header"
-	co "github.com/subiz/header/common"
+	"github.com/subiz/header/common"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	protoV2 "google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
 
-// CredKey is key which credential is putted in medatada.MD
 const (
-	CredKey  = "credential"
 	CtxKey   = "pcontext"
-	ErrKey   = "error"
 	PanicKey = "panic"
 )
-
-// WithCache returns a DialOption which can cache the result of the grpc requests.
-// The server control caching much like HTTP Cache-Control Header. The server attachs
-// "max-age" header indicates how many seconds should the client cache the response.
-// For that duration, the client would returns immediately the last response for those
-// requests that has identical parameters.
-//
-// MAGIC: this interceptor may drop all call options, its trailing
-// interceptors may also not be executed. We can remove this magic
-// if we have better understanding of the go grpc library
-func WithCache() grpc.DialOption {
-	var cachedMethods sync.Map
-	cache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: 1e8,     // number of keys to track frequency of (100M).
-		MaxCost:     1 << 30, // maximum cost of cache (1GB).
-		BufferItems: 64,      // number of keys per Get buffer.
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	f := func(ctx context.Context, method string, req interface{}, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// exit immediately if the method and its params match a cache item
-		if _, ok := cachedMethods.Load(method); ok {
-			key := proto.MarshalTextString(req.(proto.Message))
-			if val, ok := cache.Get(key); ok {
-				return proto.Unmarshal(val.([]byte), reply.(proto.Message))
-			}
-		}
-
-		// cache miss, invoke request normally
-		var header metadata.MD
-		opts = append([]grpc.CallOption{grpc.Header(&header)}, opts...)
-		err := invoker(ctx, method, req, reply, cc, opts...)
-		if err != nil {
-			return err
-		}
-
-		if len(header["max-age"]) > 0 {
-			maxage, err := strconv.Atoi(header["max-age"][0])
-			if err == nil {
-				key := proto.MarshalTextString(req.(proto.Message))
-				val, _ := proto.Marshal(reply.(proto.Message))
-				if maxage > 0 {
-					cachedMethods.Store(method, true)
-					cache.SetWithTTL(key, val, 1, time.Duration(maxage)*time.Second)
-				} else {
-					cache.Del(key)
-				}
-			}
-		}
-
-		return nil
-	}
-	return grpc.WithUnaryInterceptor(f)
-}
 
 // WithShardRedirect creates a dial option that learns on "shard_addrs" reponse
 // header to send requests to correct shard
@@ -117,7 +57,7 @@ func WithShardRedirect() grpc.DialOption {
 				if !ok {
 					var err error
 
-					co, err = grpc.Dial(host, grpc.WithInsecure())
+					co, err = grpc.Dial(host, grpc.WithTransportCredentials(insecure.NewCredentials()))
 					if err != nil {
 						lock.Unlock()
 						return err
@@ -152,14 +92,7 @@ func WithShardRedirect() grpc.DialOption {
 	return grpc.WithUnaryInterceptor(f)
 }
 
-// SetMaxAge is used by the grpc server to tell clients the response isn't going
-// to change for the next some seconds, and its safe to reuse this response
-func SetMaxAge(ctx context.Context, sec int) {
-	header := metadata.Pairs("max-age", fmt.Sprintf("%d", sec))
-	grpc.SendHeader(ctx, header)
-}
-
-func ToGrpcCtx(pctx *co.Context) context.Context {
+func ToGrpcCtx(pctx *common.Context) context.Context {
 	data, err := proto.Marshal(pctx)
 	if err != nil {
 		panic(fmt.Sprintf("unable to marshal cred, %v", pctx))
@@ -170,7 +103,7 @@ func ToGrpcCtx(pctx *co.Context) context.Context {
 		metadata.Pairs(CtxKey, cred64))
 }
 
-func FromGrpcCtx(ctx context.Context) *co.Context {
+func FromGrpcCtx(ctx context.Context) *common.Context {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		md, ok = metadata.FromOutgoingContext(ctx)
@@ -187,7 +120,7 @@ func FromGrpcCtx(ctx context.Context) *co.Context {
 		panic(fmt.Sprintf("%v, %s: %s", err, "wrong base64 ", cred64))
 	}
 
-	pctx := &co.Context{}
+	pctx := &common.Context{}
 	if err = proto.Unmarshal(data, pctx); err != nil {
 		panic(fmt.Sprintf("%v, %s: %s", err, "unable to unmarshal cred ", cred64))
 	}
@@ -354,7 +287,7 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 
 		if !ok {
 			var err error
-			cc, err = grpc.Dial(host, grpc.WithInsecure())
+			cc, err = grpc.Dial(host, grpc.WithTransportCredentials(insecure.NewCredentials()))
 			if err != nil {
 				lock.Unlock()
 				return nil, err
@@ -409,7 +342,7 @@ func getReturnType(server interface{}, fullmethod string) reflect.Type {
 }
 
 func GetAccountId(ctx context.Context, message interface{}) string {
-	msgrefl := message.(protoV2.Message).ProtoReflect()
+	msgrefl := message.(proto.Message).ProtoReflect()
 	accIdDesc := msgrefl.Descriptor().Fields().ByName("account_id")
 	accid := ""
 	if accIdDesc == nil {
