@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/subiz/header"
 	"github.com/subiz/header/common"
+	"github.com/subiz/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -133,16 +133,16 @@ func RecoverInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServe
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = header.E500(e, header.E_undefined)
+					err = log.ErrServer(e)
 				} else {
-					err = header.E500(nil, header.E_undefined, fmt.Sprintf("%v", e))
+					err = log.ErrServer(nil, log.M{"base": e})
 				}
 			}
 		}()
 		ret, err = handler(ctx, req)
 	}()
 	if err != nil {
-		e := header.E500(err, header.E_undefined)
+		e := log.ErrServer(err)
 		md := metadata.Pairs(PanicKey, e.Error())
 		grpc.SendHeader(ctx, md)
 	}
@@ -154,20 +154,22 @@ func NewRecoveryInterceptor() grpc.ServerOption {
 	return grpc.UnaryInterceptor(RecoverInterceptor)
 }
 
-func GetPanic(md metadata.MD) *header.Error {
+func GetPanic(md metadata.MD) *log.AError {
 	errs := strings.Join(md[PanicKey], "")
 	if errs == "" {
 		return nil
 	}
-	return header.FromString(errs)
+	return log.FromString(errs)
 }
 
 // forward proxy a GRPC calls to another host, header and trailer are preserved
 // parameters:
-//   host: host address which will be redirected to
-//   method: the full RPC method string, i.e., /package.service/method.
-//   returnedType: type of returned value
-//   in: value of input (in request) parameter
+//
+//	host: host address which will be redirected to
+//	method: the full RPC method string, i.e., /package.service/method.
+//	returnedType: type of returned value
+//	in: value of input (in request) parameter
+//
 // this method returns output just like a normal GRPC call
 func forward(cc *grpc.ClientConn, method string, returnedType reflect.Type, ctx context.Context, in interface{}, extraHeader metadata.MD) (interface{}, error) {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -227,9 +229,9 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = header.E500(e, header.E_undefined)
+					err = log.ErrServer(e)
 				} else {
-					err = header.E500(nil, header.E_undefined, fmt.Sprintf("%v", e))
+					err = log.ErrServer(nil, log.M{"base": e})
 				}
 			}
 		}()
@@ -309,9 +311,10 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 // getReturnType returns the return types for a GRPC method
 // the method name should be full method name (i.e., /package.service/method)
 // For example, with handler
-//   (s *server) func Goodbye() string {}
-//   (s *server) func Ping(_ context.Context, _ *pb.Ping) (*pb.Pong, error) {}
-//   (s *server) func Hello(_ context.Context, _ *pb.Empty) (*pb.String, error) {}
+//
+//	(s *server) func Goodbye() string {}
+//	(s *server) func Ping(_ context.Context, _ *pb.Ping) (*pb.Pong, error) {}
+//	(s *server) func Hello(_ context.Context, _ *pb.Empty) (*pb.String, error) {}
 func getReturnType(server interface{}, fullmethod string) reflect.Type {
 	t := reflect.TypeOf(server)
 	for i := 0; i < t.NumMethod(); i++ {
