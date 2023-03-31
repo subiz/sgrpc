@@ -133,16 +133,16 @@ func RecoverInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServe
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = log.ErrServer(e)
+					err = log.EServer(e)
 				} else {
-					err = log.ErrServer(nil, log.M{"base": e})
+					err = log.EServer(nil, log.M{"base": e})
 				}
 			}
 		}()
 		ret, err = handler(ctx, req)
 	}()
 	if err != nil {
-		e := log.ErrServer(err)
+		e := log.EServer(err)
 		md := metadata.Pairs(PanicKey, e.Error())
 		grpc.SendHeader(ctx, md)
 	}
@@ -229,9 +229,9 @@ func NewServerShardInterceptor(serviceAddrs []string, id int) grpc.UnaryServerIn
 			if r := recover(); r != nil {
 				e, ok := r.(error)
 				if ok {
-					err = log.ErrServer(e)
+					err = log.EServer(e)
 				} else {
-					err = log.ErrServer(nil, log.M{"base": e})
+					err = log.EServer(nil, log.M{"base": e})
 				}
 			}
 		}()
