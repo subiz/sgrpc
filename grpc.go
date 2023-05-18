@@ -56,7 +56,6 @@ func WithShardRedirect() grpc.DialOption {
 				co, ok := conn[host]
 				if !ok {
 					var err error
-
 					co, err = grpc.Dial(host, grpc.WithTransportCredentials(insecure.NewCredentials()))
 					if err != nil {
 						lock.Unlock()
@@ -128,23 +127,34 @@ func FromGrpcCtx(ctx context.Context) *common.Context {
 }
 
 func RecoverInterceptor(ctx context.Context, req interface{}, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (ret interface{}, err error) {
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				e, ok := r.(error)
-				if ok {
-					err = log.EServer(e)
-				} else {
-					err = log.EServer(nil, log.M{"base": e})
-				}
+	defer func() {
+		if r := recover(); r != nil {
+			e, ok := r.(error)
+			if ok {
+				err = log.EServer(e)
+			} else {
+				err = log.EServer(nil, log.M{"base": e})
 			}
-		}()
-		ret, err = handler(ctx, req)
+		}
 	}()
-	if err != nil {
-		e := log.EServer(err)
-		md := metadata.Pairs(PanicKey, e.Error())
-		grpc.SendHeader(ctx, md)
+	ret, err = handler(ctx, req)
+	return ret, err
+}
+
+func ErrorStackInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (ret interface{}, err error) {
+	ret, err = handler(ctx, req)
+	if err == nil {
+		return ret, nil
+	}
+	if grpcerr, ok := status.FromError(err); ok {
+		ourerr := log.FromString(grpcerr.Message())
+		if ourerr != nil {
+			err = log.WrapStack(ourerr, 0)
+		} else {
+			err = log.EServer(err) // report
+		}
+	} else {
+		err = log.EServiceUnavailable(err, log.M{"method": info.FullMethod})
 	}
 	return ret, err
 }
